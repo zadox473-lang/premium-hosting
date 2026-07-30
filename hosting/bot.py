@@ -7,6 +7,8 @@ import hashlib
 import io
 import json
 import os
+from dotenv import load_dotenv
+load_dotenv("/home/ubuntu/premium-hosting/hosting/.env")
 import random
 import re
 import secrets
