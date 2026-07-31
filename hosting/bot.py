@@ -678,10 +678,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Any]] = {
 }
 
 PAYMENT_METHODS: Dict[str, Dict[str, Any]] = {
-    "Paytm":   {"name": "paytm",       "upiid": "proxyfxc@ptyes",         "type": "Send Money",       "tag": "[B]"},
+    "Paytm":   {"name": "paytm",       "number": "proxyfxc@ptyes",         "type": "Send Money",       "tag": "[B]"},
     "nagad":   {"name": "Nagad",       "number": "01306633616",         "type": "Send Money",       "tag": "[N]"},
     "rocket":  {"name": "Rocket",      "number": "01306633616",         "type": "Send Money",       "tag": "[R]"},
-    "Gpay":    {"name": "gpay",        "upiid": "proxyrealized@oksbi",         "type": "Send Money",       "tag": "[U]"},
+    "Gpay":    {"name": "gpay",        "number": "proxyrealized@oksbi",         "type": "Send Money",       "tag": "[U]"},
     "binance": {"name": "Binance Pay", "number": "Binance ID 758637628","type": "USDT (BEP20/TRC20)","tag": "[BP]"},
     "bank":    {"name": "Bank",        "number": "Contact admin",       "type": "Bank Transfer",    "tag": "[BK]"},
 }
