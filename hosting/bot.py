@@ -678,10 +678,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Any]] = {
 }
 
 PAYMENT_METHODS: Dict[str, Dict[str, Any]] = {
-    "bkash":   {"name": "bKash",       "number": "01306633616",         "type": "Send Money",       "tag": "[B]"},
+    "Paytm":   {"name": "paytm",       "upiid": "proxyfxc@ptyes",         "type": "Send Money",       "tag": "[B]"},
     "nagad":   {"name": "Nagad",       "number": "01306633616",         "type": "Send Money",       "tag": "[N]"},
     "rocket":  {"name": "Rocket",      "number": "01306633616",         "type": "Send Money",       "tag": "[R]"},
-    "upay":    {"name": "Upay",        "number": "01306633616",         "type": "Send Money",       "tag": "[U]"},
+    "Gpay":    {"name": "gpay",        "upiid": "proxyrealized@oksbi",         "type": "Send Money",       "tag": "[U]"},
     "binance": {"name": "Binance Pay", "number": "Binance ID 758637628","type": "USDT (BEP20/TRC20)","tag": "[BP]"},
     "bank":    {"name": "Bank",        "number": "Contact admin",       "type": "Bank Transfer",    "tag": "[BK]"},
 }
@@ -4190,8 +4190,8 @@ def _verify_state_janitor() -> None:
 
 # ─── Group Join Verification ─────────────────────────────────────
 REQUIRED_GROUPS = [
-    {"id": -1003715566556, "link": "https://t.me/+OClpzDTPSGxkZWU1", "name": "Group 1"},
-    {"id": -1003776599179, "link": "https://t.me/autolikegcrbot",     "name": "Group 2"},
+    {"id": -1003715566556, "link": "https://t.me/proxydominates", "name": "UPDATES"},
+    {"id": -1003797211695, "link": "https://t.me/noruleclub",     "name": "SUPPORT"},
 ]
 
 def _check_group_membership(uid: int) -> List[Dict]:
