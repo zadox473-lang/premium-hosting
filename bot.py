@@ -1135,11 +1135,15 @@ def fmt_dur(ms: int) -> str:
 
 
 def fmt_ts(iso: Optional[str]) -> str:
+    """Show timestamps in Indian Standard Time (IST, UTC+5:30)."""
     if not iso:
         return "—"
     try:
         dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        return dt.astimezone(ist).strftime("%Y-%m-%d %H:%M IST")
     except Exception:
         return str(iso)
 
@@ -10253,7 +10257,7 @@ def render_adm_subscriptions(call: types.CallbackQuery) -> None:
     expiring_7d  = []
     expired_sub  = []
     for u in paid_users:
-        exp = u.get("plan_expiry")
+        exp = u.get("plan_expires")
         if not exp:
             continue
         if exp < now_s:
@@ -10298,7 +10302,7 @@ def render_adm_sub_expiring(call: types.CallbackQuery) -> None:
     now_s = ts_iso()
     soon_s = (now_utc() + timedelta(days=7)).isoformat()
     expiring = [(uid, u) for uid, u in users.items()
-                if u.get("plan_expiry") and now_s < u["plan_expiry"] <= soon_s]
+                if u.get("plan_expires") and now_s < u["plan_expires"] <= soon_s]
     rows = "\n".join(
         f"{G['bullet']} <code>{uid}</code> <b>{esc(u.get('name','?')[:20])}</b> "
         f"plan={u.get('plan','?')} "
@@ -10317,7 +10321,7 @@ def render_adm_sub_expired(call: types.CallbackQuery) -> None:
     users = db_load()["users"]
     now_s = ts_iso()
     expired = [(uid, u) for uid, u in users.items()
-               if u.get("plan_expiry") and u["plan_expiry"] < now_s
+               if u.get("plan_expires") and u["plan_expires"] < now_s
                and u.get("plan","free") != "free"]
     rows = "\n".join(
         f"{G['bullet']} <code>{uid}</code> <b>{esc(u.get('name','?')[:20])}</b> "
@@ -10340,7 +10344,7 @@ def action_adm_sub_remind_all(admin_uid: int) -> None:
     soon_s = (now_utc() + timedelta(days=7)).isoformat()
     sent = fail = 0
     for uid, u in users.items():
-        exp = u.get("plan_expiry")
+        exp = u.get("plan_expires")
         if not exp or exp < now_s or exp > soon_s:
             continue
         plan_name = PLAN_LIMITS.get(u.get("plan","free"), {}).get("name", u.get("plan","?"))
@@ -10371,10 +10375,10 @@ def action_adm_downgrade_expired(admin_uid: int) -> None:
     now_s = ts_iso()
     downgraded = 0
     for uid, u in d["users"].items():
-        exp = u.get("plan_expiry")
+        exp = u.get("plan_expires")
         if exp and exp < now_s and u.get("plan","free") != "free":
             u["plan"] = "free"
-            u["plan_expiry"] = None
+            u["plan_expires"] = None
             downgraded += 1
     db_save(d)
     audit(admin_uid, "downgrade_expired", f"count={downgraded}")
@@ -11259,13 +11263,13 @@ def on_text(m: types.Message) -> None:
                 u = d["users"].get(str(target_uid))
                 if not u:
                     bot.reply_to(m, f"{G['no']} {sc('User not found')}: {esc(target_uid)}"); return
-                cur_exp = u.get("plan_expiry")
+                cur_exp = u.get("plan_expires")
                 if cur_exp and cur_exp > ts_iso():
                     base = datetime.fromisoformat(cur_exp.replace("Z",""))
                 else:
                     base = now_utc().replace(tzinfo=None)
                 new_exp = (base + timedelta(days=extra_days)).isoformat()
-                u["plan_expiry"] = new_exp
+                u["plan_expires"] = new_exp
                 db_save(d)
                 audit(uid, "sub_extend", f"uid={target_uid} days={extra_days}")
                 bot.reply_to(m, f"{G['ok']} {sc('Subscription extended by')} {extra_days} "
@@ -16102,14 +16106,43 @@ def action_bot_restart(call: types.CallbackQuery, bot_id: str) -> None:
     render_bot_view(call, bot_id)
 
 
+
+def tail_log(bot_id: str, lines: int = 60) -> str:
+    """Return last N log lines for a running (or recently run) child bot."""
+    try:
+        info = RUNNING.get(bot_id)
+        if info and info.get("log"):
+            log = list(info["log"])
+            chunk = log[-int(lines):] if lines else log
+            return "\n".join(str(x) for x in chunk)
+    except Exception:
+        pass
+    # fallback: log file on disk if present
+    try:
+        log_path = DIRS["logs"] / f"{bot_id}.log"
+        if log_path.exists():
+            text = log_path.read_text(errors="ignore")
+            parts = text.splitlines()
+            return "\n".join(parts[-int(lines):])
+    except Exception:
+        pass
+    return ""
+
 def action_bot_logs(call: types.CallbackQuery, bot_id: str) -> None:
     b = find_bot(bot_id)
     if not b or (b["owner"] != call.from_user.id and not is_admin(call.from_user.id)):
         ack(call, "Not found"); return
     ack(call, "Fetching logs\u2026")
-    logs = tail_log(bot_id, lines=60)
+    try:
+        logs = tail_log(bot_id, lines=60)
+    except Exception:
+        logs = ""
     if not logs:
-        logs = "(no output yet)"
+        info = RUNNING.get(bot_id)
+        if info and info.get("log"):
+            logs = "\n".join(str(x) for x in list(info["log"])[-60:])
+        else:
+            logs = "(no output yet — start the bot first)"
     cap = (
         f"<b>{G['eye']} {sc('Logs')}: {esc(b['name'])}</b>\n"
         f"{G['div_eq']}\n"
@@ -17438,6 +17471,75 @@ def render_admin_subroute(call: types.CallbackQuery, data: str) -> None:
         USER_STATES[uid] = {"flow": "await_adm_bc_set", "bc_key": "tax_percent"}
         bot.send_message(call.message.chat.id, "Send tax percent number (e.g. 18):")
         return
+
+    # --- Subscriptions nested callbacks ---
+    if data == "adm_subscriptions":
+        return render_adm_subscriptions(call)
+    if data == "adm_sub_expiring":
+        return render_adm_sub_expiring(call)
+    if data == "adm_sub_expired":
+        return render_adm_sub_expired(call)
+    if data == "adm_sub_remind_all":
+        ack(call, "Sending reminders…")
+        threading.Thread(target=lambda: action_adm_sub_remind_all(uid), daemon=True).start()
+        return
+    if data == "adm_sub_auto_downgrade":
+        cur = bool(get_setting("sub_auto_downgrade", True))
+        set_setting("sub_auto_downgrade", not cur)
+        ack(call, f"Auto-downgrade: {'ON' if not cur else 'OFF'}")
+        return render_adm_subscriptions(call)
+    if data == "adm_sub_extend_prompt":
+        USER_STATES[uid] = {"flow": "await_adm_sub_extend"}
+        bot.send_message(call.message.chat.id,
+            "Send: <code>user_id days</code>\\nExample: <code>123456789 30</code>",
+            parse_mode="HTML")
+        ack(call); return
+    if data == "adm_sub_history":
+        USER_STATES[uid] = {"flow": "await_adm_sub_history"}
+        bot.send_message(call.message.chat.id, "Send user_id to view sub history:")
+        ack(call); return
+    if data == "adm_sub_run_downgrade":
+        ack(call, "Running downgrade…")
+        try:
+            n = downgrade_expired_users()
+            ack(call, f"Done: {n if n is not None else 'ok'}")
+        except Exception as e:
+            try:
+                downgrade_expired_users()
+                ack(call, "Done")
+            except Exception as e2:
+                ack(call, f"Error: {e2}")
+        return render_adm_subscriptions(call)
+    if data == "adm_sub_send_reminders":
+        fn = globals().get("action_adm_sub_send_reminders")
+        if fn: fn(call); return
+    if data == "adm_sub_expiry_report":
+        fn = globals().get("render_adm_sub_expiry_report")
+        if fn: fn(call); return
+
+
+    # --- Admin 2FA nested ---
+    if data == "adm_2fa_setup":
+        return action_adm_2fa_setup(call)
+    if data == "adm_2fa_disable":
+        if not is_owner(uid):
+            ack(call, "Owner only"); return
+        set_setting("admin_2fa_secret", "")
+        set_setting("admin_2fa_enabled", False)
+        audit(uid, "2fa_disable", "")
+        ack(call, "2FA disabled")
+        return render_adm_admin_2fa(call)
+    if data == "adm_bc_toggle_admin_2fa_enabled":
+        if not is_owner(uid):
+            ack(call, "Owner only"); return
+        sec = get_setting("admin_2fa_secret", "") or ""
+        if not sec:
+            ack(call, "Setup secret first"); return
+        cur = bool(get_setting("admin_2fa_enabled", False))
+        set_setting("admin_2fa_enabled", not cur)
+        ack(call, f"2FA: {'ON' if not cur else 'OFF'}")
+        return render_adm_admin_2fa(call)
+
     if data in _ADVANCED_PANEL_MAP:
         fn_name = _ADVANCED_PANEL_MAP[data]
         if fn_name:
