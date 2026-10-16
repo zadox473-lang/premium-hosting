@@ -669,6 +669,7 @@ _TZ_INDEX_DATA = (
 )
 
 PLAN_LIMITS: Dict[str, Dict[str, Any]] = {
+    "terminal":   {"name": "Terminal Access", "max_bots": 10, "ram": 4096, "auto_restart": True, "price": 1500, "days": 30},
     "free":       {"name": "Free",       "max_bots": 2,   "ram": 128,  "auto_restart": False, "price": 0,    "days": 0},
     "starter":    {"name": "Starter",    "max_bots": 4,   "ram": 256,  "auto_restart": True,  "price": 99,   "days": 30},
     "basic":      {"name": "Basic",      "max_bots": 6,  "ram": 512,  "auto_restart": True,  "price": 199,  "days": 30},
@@ -2043,6 +2044,7 @@ def bot_actions_kb(bot_id: str, running: bool, premium: bool = False) -> types.I
         Btn(f"{G['bolt']}  Lɪᴠᴇ Lᴏɢꜱ", callback_data=f"bot_logs_{bot_id}", style="primary"),
         Btn(f"{G['eye']}  Iɴꜰᴏ",       callback_data=f"bot_info_{bot_id}", style="primary"),
     )
+    kb.add(Btn("🖥  Terminal", callback_data=f"bot_term_{bot_id}", style="success"))
     kb.add(
         Btn(f"{G['settings']}  Eɴᴠ Vᴀʀꜱ", callback_data=f"bot_env_{bot_id}",  style="primary"),
         Btn(f"{G['cog']}  Cʀᴏɴ",          callback_data=f"bot_cron_{bot_id}", style="primary"),
@@ -2465,12 +2467,22 @@ def _drain_proc(bot_id: str, proc: subprocess.Popen, log: List[str]) -> None:
     try:
         if not proc.stdout:
             return
-        for line in iter(proc.stdout.readline, b""):
-            try:
-                txt = line.decode("utf-8", "replace").rstrip()
-            except Exception:
-                txt = repr(line)
-            log.append(txt)
+        buf = ""
+        partial_shown = False
+        while True:
+            chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(1)
+            if not chunk:
+                break
+            if partial_shown and log:
+                log.pop()
+                partial_shown = False
+            buf += chunk.decode("utf-8", "replace")
+            *full, buf = buf.split("\n")
+            for txt in full:
+                log.append(txt.rstrip("\r"))
+            if buf:
+                log.append(buf.rstrip("\r"))
+                partial_shown = True
             if len(log) > LOG_RING:
                 del log[: len(log) - LOG_RING]
     except Exception:
@@ -2544,6 +2556,7 @@ def start_child(b: Dict[str, Any]) -> Dict[str, Any]:
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(bot_dir), env=safe_env(bot_dir, extra_env),
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             preexec_fn=os.setsid if os.name == "posix" else None,
         )
@@ -4527,6 +4540,110 @@ def cmd_id(m: types.Message) -> None:
     if not _is_private(m):
         return
     bot.reply_to(m, f"<code>{m.from_user.id}</code>")
+
+
+# ═════════════════════════════════════════════════════════════════
+# TERMINAL ACCESS (plan-gated) — send text to a hosted bot's stdin
+# ═════════════════════════════════════════════════════════════════
+TERMINAL_PLAN_KEYS = {"terminal"}
+
+
+def has_terminal_access(uid: int) -> bool:
+    try:
+        if is_admin(uid):
+            return True
+        plan = (db_load()["users"].get(str(uid)) or {}).get("plan", "free")
+        if plan in TERMINAL_PLAN_KEYS:
+            return True
+        return "terminal" in str(PLAN_LIMITS.get(plan, {}).get("name", "")).lower()
+    except Exception:
+        return False
+
+
+def _term_send(chat_id: int, bot_id: str, lines: List[str], note: str = "") -> None:
+    body = "\n".join(lines).strip() or "(no new output yet)"
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        Btn("🔄  Refresh", callback_data=f"bot_term_{bot_id}", style="primary"),
+        Btn("✖  Exit",     callback_data=f"bot_termx_{bot_id}", style="danger"),
+    )
+    bot.send_message(
+        chat_id,
+        f"<b>🖥 Terminal</b>{(' — ' + esc(note)) if note else ''}\n<pre>{esc(body)[-3500:]}</pre>\n"
+        f"<i>Type your reply (phone / OTP / password) and send it. It goes straight to the bot's stdin. /cancel to exit.</i>",
+        parse_mode="HTML", reply_markup=kb,
+    )
+
+
+@bot.callback_query_handler(func=lambda c: bool(c.data) and (c.data.startswith("bot_term_") or c.data.startswith("bot_termx_")))
+def cb_terminal(call: types.CallbackQuery) -> None:
+    exit_mode = call.data.startswith("bot_termx_")
+    bid = call.data.split("_", 2)[2]
+    b = find_bot(bid)
+    if not b or (b["owner"] != call.from_user.id and not is_admin(call.from_user.id)):
+        try: bot.answer_callback_query(call.id, "Not yours")
+        except Exception: pass
+        return
+    if exit_mode:
+        try: bot.answer_callback_query(call.id)
+        except Exception: pass
+        USER_STATES.pop(call.from_user.id, None)
+        bot.send_message(call.message.chat.id, "✅ Terminal closed.")
+        return
+    if not has_terminal_access(call.from_user.id):
+        try: bot.answer_callback_query(call.id, "Terminal Access plan required", show_alert=True)
+        except Exception: pass
+        bot.send_message(call.message.chat.id,
+            "🔒 <b>Terminal Access</b> plan required.\nBuy it from /start → Plans → <b>Terminal Access</b>.",
+            parse_mode="HTML")
+        return
+    try: bot.answer_callback_query(call.id)
+    except Exception: pass
+    info = RUNNING.get(bid)
+    if not info or info["proc"].poll() is not None:
+        bot.send_message(call.message.chat.id, "⚠️ Bot is not running. Start it first, then open Terminal.")
+        return
+    USER_STATES[call.from_user.id] = {"flow": "await_terminal", "bot_id": bid}
+    _term_send(call.message.chat.id, bid, (info.get("log") or [])[-25:], b.get("name", ""))
+
+
+@bot.message_handler(
+    func=lambda m: (m.content_type == "text"
+                    and not (m.text or "").startswith("/")
+                    and (USER_STATES.get(m.from_user.id) or {}).get("flow") == "await_terminal"),
+    content_types=["text"],
+)
+def on_terminal_input(m: types.Message) -> None:
+    if not _is_private(m):
+        return
+    st = USER_STATES.get(m.from_user.id) or {}
+    bid = st.get("bot_id", "")
+    b = find_bot(bid)
+    if (not b or (b["owner"] != m.from_user.id and not is_admin(m.from_user.id))
+            or not has_terminal_access(m.from_user.id)):
+        USER_STATES.pop(m.from_user.id, None)
+        bot.reply_to(m, "🔒 Terminal Access required. Terminal closed.")
+        return
+    info = RUNNING.get(bid)
+    if not info or info["proc"].poll() is not None or not info["proc"].stdin:
+        USER_STATES.pop(m.from_user.id, None)
+        bot.reply_to(m, "⚠️ Bot is not running anymore. Terminal closed.")
+        return
+    log = info.get("log") or []
+    since = len(log)
+    try:
+        info["proc"].stdin.write((m.text + "\n").encode("utf-8"))
+        info["proc"].stdin.flush()
+    except Exception as e:
+        bot.reply_to(m, f"⚠️ Could not write to stdin: {e}")
+        return
+    try:
+        bot.delete_message(m.chat.id, m.message_id)   # hide OTP / password
+    except Exception:
+        pass
+    time.sleep(3)
+    log = info.get("log") or []
+    _term_send(m.chat.id, bid, list(log[since:]) if since <= len(log) else list(log[-30:]), b.get("name", ""))
 
 
 @bot.message_handler(commands=["cancel"])
