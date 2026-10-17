@@ -4713,6 +4713,74 @@ def cb_root(call: types.CallbackQuery) -> None:
         ack(call, "Please solve the captcha first — send /start.")
         return
     data = call.data or ""
+    # BOTMGR_STOP_FIRST_HOOK
+
+    # === BOTMGR STOP FIRST (must ack or Telegram shows ?) ===
+    try:
+        _d0 = (call.data or "")
+        
+        if _d0.startswith("botmgr_start_"):
+            _bid = _d0.split("botmgr_start_", 1)[-1].strip()
+            print(f"[botmgr-first] start {_bid}", flush=True)
+            try:
+                bot.answer_callback_query(call.id, "Starting…")
+            except Exception:
+                pass
+            try:
+                _b = find_bot(_bid)
+                if _b and "_pty_start_bot" in dir():
+                    _pty_start_bot(_b, int(_b.get("owner") or call.from_user.id))
+                elif _b and "start_child" in dir():
+                    start_child(_b)
+                else:
+                    action_bot_start(call, _bid)
+                    return
+                bot.answer_callback_query(call.id, "Started ✓")
+                bot.send_message(call.message.chat.id, f"▶️ Started <code>{_bid}</code>", parse_mode="HTML")
+            except Exception as _se:
+                print(f"[botmgr-first start] {_se}", flush=True)
+                try:
+                    bot.answer_callback_query(call.id, str(_se)[:80], show_alert=True)
+                except Exception:
+                    pass
+            return
+
+        if _d0.startswith("botmgr_stop_"):
+            _bid = _d0.split("botmgr_stop_", 1)[-1].strip()
+            print(f"[botmgr-first] stop {_bid}", flush=True)
+            try:
+                bot.answer_callback_query(call.id, "Stopping…")
+            except Exception:
+                pass
+            try:
+                stop_child(_bid)
+            except Exception as _se:
+                print(f"[botmgr-first] { _se }", flush=True)
+                try:
+                    bot.answer_callback_query(call.id, str(_se)[:80], show_alert=True)
+                except Exception:
+                    pass
+                return
+            try:
+                bot.answer_callback_query(call.id, "Stopped ✓")
+            except Exception:
+                pass
+            try:
+                bot.send_message(call.message.chat.id, f"✅ Stopped <code>{_bid}</code>", parse_mode="HTML")
+            except Exception:
+                pass
+            return
+        if _d0 == "adm_botmgr_lookup":
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                pass
+            USER_STATES[call.from_user.id] = {"flow": "await_botmgr_uid"}
+            bot.send_message(call.message.chat.id, "🔍 User ID bhejo (numeric). /cancel se band.")
+            return
+    except Exception as _be:
+        print(f"[botmgr-first] { _be }", flush=True)
+    # === end botmgr first ===
     try:
         _route_callback(call, data)
     except Exception as e:
@@ -4771,6 +4839,22 @@ def _route_callback(call: types.CallbackQuery, data: str) -> None:
     # ─── bot actions ───────────────────────────────────────────
     if data.startswith("bot_view_"):
         ack(call); render_bot_view(call, data.split("_", 2)[2]); return
+
+    if data == "adm_botmgr_lookup":
+        if not (is_owner(call.from_user.id) or is_admin(call.from_user.id)):
+            ack(call, "Admin only"); return
+        USER_STATES[call.from_user.id] = {"flow": "await_botmgr_uid"}
+        ack(call)
+        bot.send_message(
+            call.message.chat.id,
+            "🔍 <b>Bot Manager — Lookup</b>\nUser ID bhejo (numeric).\n/cancel se band.",
+            parse_mode="HTML",
+        )
+        return
+    if data.startswith("botmgr_stop_"):
+        action_botmgr_stop(call, data.split("botmgr_stop_", 1)[1])
+        return
+
     if data.startswith("bot_start_"):
         ack(call); action_bot_start(call, data.split("_", 2)[2]); return
     if data.startswith("bot_stop_"):
@@ -7491,6 +7575,16 @@ def render_adm_bot_manager(call: types.CallbackQuery) -> None:
         Btn("🗑️  Cʟᴇᴀɴ Oʀᴘʜᴀɴꜱ",    callback_data="adm_set_clean_orphans",   style="danger"),
     )
     kb.add(Btn(f"{G['back']}  Aᴅᴍɪɴ", callback_data="menu_admin", style="primary"))
+    
+    # Lookup user bots
+    try:
+        kb.add(Btn("🔍  Lookup User ID", callback_data="adm_botmgr_lookup", style="primary"))
+    except Exception:
+        try:
+            kb.add(types.InlineKeyboardButton("🔍 Lookup User ID", callback_data="adm_botmgr_lookup"))
+        except Exception as _e:
+            print(_e)
+
     show_menu(call.message.chat.id, PHOTOS["admin"], cap, kb, call=call)
 
 
@@ -10788,6 +10882,54 @@ def on_text(m: types.Message) -> None:
 
     st = USER_STATES.get(uid) or {}
     flow = st.get("flow")
+
+    # BOTMGR_FIRST_ON_TEXT
+    if flow == "await_botmgr_uid":
+        print(f"[botmgr] got id text from {uid}: {(text or "")[:40]}", flush=True)
+        raw = (text or "").strip()
+        if raw.lower() in ("/cancel", "cancel"):
+            USER_STATES.pop(uid, None)
+            bot.reply_to(m, "Cancelled")
+            return
+        digits = "".join(c for c in raw if c.isdigit())
+        if not digits:
+            bot.reply_to(m, "Sirf numeric User ID bhejo")
+            return
+        target = int(digits)
+        USER_STATES.pop(uid, None)
+        bots = []
+        try:
+            bots = _bots_for_owner(target)
+        except Exception as e:
+            print(f"[botmgr] list err {e}", flush=True)
+            bot.reply_to(m, f"List error: {e}")
+            return
+        lines = [f"User <code>{target}</code> bots: <b>{len(bots)}</b>"]
+        kb = types.InlineKeyboardMarkup()
+        for b in bots[:25]:
+            bid = str(b.get("_id") or b.get("id") or "")
+            name = str(b.get("name") or bid)[:20]
+            run = False
+            try:
+                run = _bot_is_running(bid)
+            except Exception:
+                pass
+            lines.append(f"• <b>{name}</b> | <code>{bid}</code> | {'▶️' if run else '⏹'}")
+            if run:
+                kb.add(types.InlineKeyboardButton(
+                    f"⏹ Stop {name}",
+                    callback_data=("botmgr_stop_" + bid)[:64],
+                ))
+            else:
+                kb.add(types.InlineKeyboardButton(
+                    f"▶️ Start {name}",
+                    callback_data=("botmgr_start_" + bid)[:64],
+                ))
+        if not bots:
+            lines.append("<i>Koi bot nahi</i>")
+        kb.add(types.InlineKeyboardButton("🔍 Another ID", callback_data="adm_botmgr_lookup"))
+        bot.send_message(m.chat.id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+        return
     try:
         if flow == "await_env_kv":
             return _handle_env_kv(m, st)
@@ -17657,6 +17799,31 @@ def render_admin_subroute(call: types.CallbackQuery, data: str) -> None:
         ack(call, f"2FA: {'ON' if not cur else 'OFF'}")
         return render_adm_admin_2fa(call)
 
+    # BOTMGR_ROUTE_V2
+    if data == "adm_botmgr_lookup":
+        uid = call.from_user.id
+        if not (is_owner(uid) or is_admin(uid)):
+            ack(call, "Admin only"); return
+        USER_STATES[uid] = {"flow": "await_botmgr_uid"}
+        ack(call)
+        bot.send_message(call.message.chat.id, "🔍 User ID bhejo (numeric). /cancel se band.")
+        return
+    if data.startswith("botmgr_stop_"):
+        action_botmgr_stop(call, data.split("botmgr_stop_", 1)[1])
+        return
+
+    # BOTMGR_STOP_V4
+    if data.startswith("botmgr_stop_"):
+        try:
+            action_botmgr_stop(call, data.split("botmgr_stop_", 1)[1])
+        except Exception as _e:
+            print(f"[botmgr] route {_e}", flush=True)
+            try:
+                ack(call, str(_e)[:100])
+            except Exception:
+                pass
+        return
+
     if data in _ADVANCED_PANEL_MAP:
         fn_name = _ADVANCED_PANEL_MAP[data]
         if fn_name:
@@ -18734,6 +18901,61 @@ def on_text(m: types.Message) -> None:
             bot.reply_to(m, f"{G['ok']} TG backup channel: <code>{esc(ch)}</code>",
                          parse_mode="HTML"); return
         # Group verification flows
+
+        if flow == "await_botmgr_uid":
+            if not (is_owner(uid) or is_admin(uid)):
+                USER_STATES.pop(uid, None); return
+            raw = (text or "").strip()
+            if raw.lower() in ("/cancel", "cancel"):
+                USER_STATES.pop(uid, None)
+                bot.reply_to(m, "Cancelled"); return
+            if not raw.isdigit():
+                bot.reply_to(m, "Sirf numeric User ID bhejo"); return
+            target = int(raw)
+            USER_STATES.pop(uid, None)
+            render_botmgr_user_bots(m.chat.id, uid, target)
+            return
+
+        # BOTMGR_TEXT_V3
+
+        if flow == "await_botmgr_uid":
+            try:
+                if not (is_owner(uid) or is_admin(uid)):
+                    USER_STATES.pop(uid, None)
+                    return
+            except Exception:
+                pass
+            raw = (text or "").strip().replace(" ", "")
+            if raw.lower() in ("/cancel", "cancel"):
+                USER_STATES.pop(uid, None)
+                try:
+                    bot.reply_to(m, "Cancelled")
+                except Exception:
+                    pass
+                return
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            if not digits:
+                try:
+                    bot.reply_to(m, "Sirf numeric User ID bhejo")
+                except Exception:
+                    pass
+                return
+            target = int(digits)
+            USER_STATES.pop(uid, None)
+            try:
+                bot.reply_to(m, f"Looking up <code>{target}</code>…", parse_mode="HTML")
+            except Exception:
+                pass
+            try:
+                render_botmgr_user_bots(m.chat.id, uid, target)
+            except Exception as e:
+                print(f"[botmgr] render {e}", flush=True)
+                try:
+                    bot.reply_to(m, f"Error: {e}")
+                except Exception:
+                    pass
+            return
+
         if flow == "await_adm_grpv_add":
             if not (is_owner(uid) or is_admin(uid)):
                 USER_STATES.pop(uid, None)
@@ -19222,6 +19444,314 @@ def cmd_forcejoin_off(m: types.Message) -> None:
     if not (is_owner(m.from_user.id) or is_admin(m.from_user.id)): return
     set_setting("group_verify_enabled", False)
     bot.reply_to(m, "✅ Force Join OFF")
+
+
+
+
+# ── Bot Manager: lookup user bots + stop ─────────────────────────────────────
+def _bots_for_owner(uid: int):
+    """Return list of bot dicts owned by uid."""
+    out = []
+    try:
+        d = db_load_ro() if "db_load_ro" in dir() else db_load()
+        bots = d.get("bots") or {}
+        for bid, b in bots.items():
+            try:
+                if int(b.get("owner") or 0) == int(uid):
+                    bb = dict(b)
+                    bb["_id"] = str(bid)
+                    out.append(bb)
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[botmgr] {_e if False else e}", flush=True)
+    return out
+
+
+def _bot_is_running(bot_id: str) -> bool:
+    try:
+        r = RUNNING.get(str(bot_id))
+        if not r:
+            return False
+        proc = r.get("proc")
+        if proc is not None and getattr(proc, "poll", lambda: 0)() is None:
+            return True
+        if r.get("status") == "running":
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def render_botmgr_user_bots(chat_id: int, admin_uid: int, target_uid: int, call=None) -> None:
+    bots = _bots_for_owner(target_uid)
+    lines = [
+        f"<b>🤖 Bot Manager</b>",
+        f"User: <code>{target_uid}</code>",
+        f"Total bots: <b>{len(bots)}</b>",
+        G.get("div_eq", "══════"),
+    ]
+    kb = types.InlineKeyboardMarkup()
+    if not bots:
+        lines.append("<i>Is user ke koi bots nahi</i>")
+    else:
+        for i, b in enumerate(bots[:30], 1):
+            bid = str(b.get("_id") or b.get("id") or "")
+            name = esc(str(b.get("name") or bid)[:24])
+            run = _bot_is_running(bid)
+            st = "▶️ running" if run else "⏹ stopped"
+            lines.append(f"{i}) <b>{name}</b>\n   id: <code>{bid}</code>\n   {st}")
+            if run:
+                kb.add(types.InlineKeyboardButton(
+                    f"⏹ Stop {name[:16]}",
+                    callback_data=f"botmgr_stop_{bid}"[:64],
+                ))
+    kb.add(types.InlineKeyboardButton("🔍 Another User ID", callback_data="adm_botmgr_lookup"))
+    kb.add(types.InlineKeyboardButton("← Bot Manager", callback_data="adm_bot_manager"))
+    text = "\n".join(lines) + "\n" + G.get("div", "──") + (FOOTER if "FOOTER" in dir() else "")
+    try:
+        if call:
+            show_menu(chat_id, PHOTOS.get("admin", PHOTOS.get("main")), text, kb, call=call)
+        else:
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+
+def action_botmgr_stop(call: types.CallbackQuery, bot_id: str) -> None:
+    uid = call.from_user.id
+    try:
+        if not (is_owner(uid) or is_admin(uid)):
+            ack(call, "Admin only")
+            return
+    except Exception:
+        pass
+    bot_id = (bot_id or "").strip()
+    print(f"[botmgr] stop request {bot_id} by {uid}", flush=True)
+    b = None
+    try:
+        b = find_bot(bot_id)
+    except Exception as e:
+        print(f"[botmgr] find {e}", flush=True)
+    if not b:
+        # try partial match
+        try:
+            d = db_load_ro() if "db_load_ro" in dir() else db_load()
+            for bid, bb in (d.get("bots") or {}).items():
+                if str(bid) == bot_id or str(bid).startswith(bot_id) or bot_id in str(bid):
+                    b = dict(bb)
+                    b["_id"] = str(bid)
+                    bot_id = str(bid)
+                    break
+        except Exception as e:
+            print(f"[botmgr] scan {e}", flush=True)
+    if not b:
+        ack(call, "Bot not found")
+        return
+    try:
+        stop_child(bot_id)
+    except Exception as e:
+        print(f"[botmgr] stop_child {e}", flush=True)
+        ack(call, f"Stop failed: {e}")
+        return
+    try:
+        terminal_close(bot_id)
+    except Exception:
+        pass
+    try:
+        ack(call, "Stopped")
+    except Exception:
+        pass
+    owner = int(b.get("owner") or 0)
+    # refresh simple list
+    try:
+        bots = _bots_for_owner(owner)
+        lines = [f"User <code>{owner}</code> bots: <b>{len(bots)}</b>"]
+        kb = types.InlineKeyboardMarkup()
+        for bb in bots[:25]:
+            bid = str(bb.get("_id") or bb.get("id") or "")
+            name = str(bb.get("name") or bid)[:20]
+            run = False
+            try:
+                run = _bot_is_running(bid)
+            except Exception:
+                pass
+            lines.append(f"• <b>{name}</b> | <code>{bid}</code> | {'▶️' if run else '⏹'}")
+            if run:
+                kb.add(types.InlineKeyboardButton(f"⏹ {name}", callback_data=("botmgr_stop_" + bid)[:64]))
+        kb.add(types.InlineKeyboardButton("🔍 Another ID", callback_data="adm_botmgr_lookup"))
+        try:
+            bot.edit_message_text(
+                "\n".join(lines),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        except Exception:
+            bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        print(f"[botmgr] refresh {e}", flush=True)
+        bot.send_message(call.message.chat.id, f"Stopped <code>{bot_id}</code>", parse_mode="HTML")
+
+
+
+def cmd_botmgr(m: types.Message) -> None:
+    if not _is_private(m):
+        return
+    uid = m.from_user.id
+    if not (is_owner(uid) or is_admin(uid)):
+        return
+    USER_STATES[uid] = {"flow": "await_botmgr_uid"}
+    bot.reply_to(m, "🔍 User ID bhejo (jiske bots dekhne / stop karne hain).\\n/cancel se band.")
+
+
+
+
+
+@bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith("botmgr_stop_"))
+def cb_botmgr_stop(call: types.CallbackQuery) -> None:
+    """Dedicated stop — does not rely on _route_callback."""
+    try:
+        bot.answer_callback_query(call.id, "Stopping…")
+    except Exception:
+        pass
+    data = call.data or ""
+    bot_id = data.split("botmgr_stop_", 1)[-1].strip()
+    print(f"[botmgr-cb] stop {bot_id} from {call.from_user.id}", flush=True)
+    uid = call.from_user.id
+    try:
+        if not (is_owner(uid) or is_admin(uid)):
+            bot.answer_callback_query(call.id, "Admin only", show_alert=True)
+            return
+    except Exception:
+        pass
+    try:
+        stop_child(bot_id)
+        print(f"[botmgr-cb] stop_child ok {bot_id}", flush=True)
+    except Exception as e:
+        print(f"[botmgr-cb] stop_child err {e}", flush=True)
+        try:
+            bot.answer_callback_query(call.id, f"Fail: {e}", show_alert=True)
+        except Exception:
+            pass
+        return
+    try:
+        terminal_close(bot_id)
+    except Exception:
+        pass
+    # find owner for refresh
+    owner = 0
+    try:
+        b = find_bot(bot_id)
+        if b:
+            owner = int(b.get("owner") or 0)
+    except Exception:
+        pass
+    if not owner:
+        try:
+            d = db_load_ro() if "db_load_ro" in dir() else db_load()
+            for bid, bb in (d.get("bots") or {}).items():
+                if str(bid) == bot_id:
+                    owner = int(bb.get("owner") or 0)
+                    break
+        except Exception:
+            pass
+    try:
+        bot.answer_callback_query(call.id, "Stopped ✓")
+    except Exception:
+        pass
+    lines = [f"✅ Stopped <code>{bot_id}</code>"]
+    if owner:
+        try:
+            bots = _bots_for_owner(owner)
+            lines.append(f"User <code>{owner}</code> bots: {len(bots)}")
+            kb = types.InlineKeyboardMarkup()
+            for bb in bots[:25]:
+                bid = str(bb.get("_id") or bb.get("id") or "")
+                name = str(bb.get("name") or bid)[:20]
+                run = False
+                try:
+                    run = _bot_is_running(bid)
+                except Exception:
+                    pass
+                lines.append(f"• {name} | <code>{bid}</code> | {'▶️' if run else '⏹'}")
+                if run:
+                    kb.add(types.InlineKeyboardButton(
+                        f"⏹ {name}",
+                        callback_data=("botmgr_stop_" + bid)[:64],
+                    ))
+            kb.add(types.InlineKeyboardButton("🔍 Another ID", callback_data="adm_botmgr_lookup"))
+            bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception as e:
+            print(f"[botmgr-cb] refresh {e}", flush=True)
+    bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: bool(c.data) and c.data == "adm_botmgr_lookup")
+def cb_botmgr_lookup(call: types.CallbackQuery) -> None:
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    uid = call.from_user.id
+    try:
+        if not (is_owner(uid) or is_admin(uid)):
+            return
+    except Exception:
+        pass
+    USER_STATES[uid] = {"flow": "await_botmgr_uid"}
+    bot.send_message(call.message.chat.id, "🔍 User ID bhejo (numeric). /cancel se band.")
+
+
+
+
+
+@bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith("botmgr_start_"))
+def cb_botmgr_start(call: types.CallbackQuery) -> None:
+    try:
+        bot.answer_callback_query(call.id, "Starting…")
+    except Exception:
+        pass
+    uid = call.from_user.id
+    try:
+        if not (is_owner(uid) or is_admin(uid)):
+            bot.answer_callback_query(call.id, "Admin only", show_alert=True)
+            return
+    except Exception:
+        pass
+    bot_id = (call.data or "").split("botmgr_start_", 1)[-1].strip()
+    print(f"[botmgr] start {bot_id}", flush=True)
+    try:
+        # prefer existing start paths
+        if "action_bot_start" in dir() and callable(action_bot_start):
+            action_bot_start(call, bot_id)
+            return
+    except Exception as e:
+        print(f"[botmgr] action_bot_start {e}", flush=True)
+    try:
+        b = find_bot(bot_id)
+        if not b:
+            bot.answer_callback_query(call.id, "Not found", show_alert=True)
+            return
+        if "_pty_start_bot" in dir() and callable(_pty_start_bot):
+            res = _pty_start_bot(b, int(b.get("owner") or uid))
+        else:
+            res = start_child(b) if "start_child" in dir() else {"ok": False, "error": "no start"}
+        if isinstance(res, dict) and not res.get("ok", True):
+            bot.answer_callback_query(call.id, str(res.get("error") or "fail")[:80], show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "Started ✓")
+        bot.send_message(call.message.chat.id, f"▶️ Started <code>{bot_id}</code>", parse_mode="HTML")
+    except Exception as e:
+        print(f"[botmgr] start err {e}", flush=True)
+        try:
+            bot.answer_callback_query(call.id, str(e)[:80], show_alert=True)
+        except Exception:
+            pass
+
 
 
 if __name__ == "__main__":
