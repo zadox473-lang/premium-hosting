@@ -1252,7 +1252,7 @@ class KeyRing:
     @staticmethod
     def _gh_key_repo() -> str:
         # Prefer a separate repo for keys; falls back to backup repo
-        return (
+        return _gh_norm_repo(
             os.environ.get("GITHUB_KEY_REPO")
             or get_setting("github_key_repo", "")
             or os.environ.get("GITHUB_REPO")
@@ -3030,10 +3030,27 @@ GH = {
 }
 
 
+def _gh_norm_repo(v: Any) -> str:
+    """Accept 'owner/repo', full https URL, '.git' suffix, git@ form."""
+    v = str(v or "").strip()
+    for p in ("https://github.com/", "http://github.com/", "https://www.github.com/",
+              "github.com/", "git@github.com:"):
+        if v.lower().startswith(p):
+            v = v[len(p):]
+            break
+    v = v.strip().strip("/")
+    if v.endswith(".git"):
+        v = v[:-4]
+    return v.strip("/")
+
+
 def gh_load_config() -> None:
     GH["token"]  = os.environ.get("GITHUB_TOKEN")  or get_setting("github_token", "")  or ""
     GH["repo"]   = os.environ.get("GITHUB_REPO")   or get_setting("github_repo", "")   or ""
     GH["branch"] = os.environ.get("GITHUB_BRANCH") or get_setting("github_branch", "main") or "main"
+    GH["repo"]   = _gh_norm_repo(GH["repo"])
+    GH["token"]  = str(GH["token"] or "").strip()
+    GH["branch"] = str(GH["branch"] or "main").strip() or "main"
     try:
         ivl = int(os.environ.get("GITHUB_AUTO_INTERVAL_MIN") or get_setting("github_interval_min", 360))
     except Exception:
@@ -3052,6 +3069,10 @@ def gh_set_config(patch: Dict[str, Any]) -> None:
                 v = int(v)
             except Exception:
                 v = 360
+        if k == "repo":
+            v = _gh_norm_repo(v)
+        elif k in ("token", "branch"):
+            v = str(v or "").strip()
         GH[k] = v
         set_setting(keymap[k], v)
 
@@ -3169,7 +3190,7 @@ def gh_backup_now() -> Dict[str, Any]:
             raise RuntimeError("upload failed")
         GH["lastBackup"] = ts
         GH["lastError"] = None
-        return {"ok": True, "sizeMB": f"{size_mb:.2f}", "ts": ts}
+        return {"ok": True, "sizeMB": f"{size_mb:.2f}", "sizeBytes": len(buf), "ts": ts}
     except Exception as e:
         GH["lastError"] = str(e)
         return {"ok": False, "error": str(e)}
